@@ -2,6 +2,7 @@ import os
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 from huggingface_hub import snapshot_download
+#下载模型
 
 snapshot_download(
     repo_id="BAAI/bge-m3",
