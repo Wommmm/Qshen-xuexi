@@ -9,7 +9,7 @@ def insert_data(client:MilvusClient,collection_name:str):
     """
 #1.加载一个文件，
     # 修复：load 加上()
-    doc_list = UnstructuredWordDocumentLoader(r"D:\LANGCHANINDEMO\lianxineir\sample.docx",mode="single").load()
+    doc_list = UnstructuredWordDocumentLoader(r"D:\LANGCHANINDEMO\september\lianxineir\sample.docx",mode="single").load()
 #2.切分文件
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500,chunk_overlap=100,separators=["\n\n", "\n", "。", "！", "？", "……", "，", ""],)
     splitted_doc_list = text_splitter.split_documents(doc_list)
@@ -66,7 +66,7 @@ if __name__ == "__main__":
         schema.add_field("vector", DataType.FLOAT_VECTOR, dim=DIM)
         schema.add_field("sparse_vector", DataType.SPARSE_FLOAT_VECTOR)
         schema.add_field("text", DataType.VARCHAR, max_length=4096)
-        client.create_collection("demo_collection", schema=schema)
+        client.create_collection("demo_collection", schema=schema,indexes=[{"field":"vector"}])
         print("已重建 demo_collection，dim =", DIM)
 
     insert_data(client, "demo_collection")
