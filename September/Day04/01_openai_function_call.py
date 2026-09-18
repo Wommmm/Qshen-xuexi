@@ -48,7 +48,7 @@ print(resp.choices[0].message.tool_calls)
 
 messages.append(resp.choices[0].message)
 #4.解析OpenAI返回的tool_call，具体调用get_weather函数
-too_call_arguments = resp.choices[0].message.tool_calls[0].function.arguments
+too_call_arguments = resp.choices[0].message.tool_calls[0].function.arguments#解析
 to_call_id = resp.choices[0].message.tool_calls[0].id
 #构建一个tool message
 import json
