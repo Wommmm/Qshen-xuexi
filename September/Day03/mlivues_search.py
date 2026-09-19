@@ -36,6 +36,7 @@ def hybrid_search(client:MilvusClient, collenction_name:str, danse_vec:list, que
         danse_vec: 稠密向量
         query_sparse_vecotor: 稀疏向量（字典格式）
         top_k: 返回最相似的 top_k 个结果
+        
     
     返回:
         混合检索结果
@@ -69,7 +70,9 @@ def hybrid_search(client:MilvusClient, collenction_name:str, danse_vec:list, que
         collection_name=collenction_name,
         reqs=[sparse_request, danse_request],  # 传入多个搜索请求
         ranker=reranker,                       # 使用 RRF 融合排序
-        limit=top_k,                           # 最终返回结果数量
+        limit=top_k, # 返回结果数量
+        output_fields = ["text"]# 指定需要返回的非向量字段
+                                                      
     )
     return res
 
@@ -79,7 +82,7 @@ def hybrid_search(client:MilvusClient, collenction_name:str, danse_vec:list, que
 client = MilvusClient(uri="http://127.0.0.1:19530")
 
 # 2. 定义查询文本
-query = "国家所有权"
+query = "国家所有权是在第几章规定的"
 
 # 3. 加载 BGE-M3 模型（支持同时输出稠密向量和稀疏向量）
 from FlagEmbedding import BGEM3FlagModel    
@@ -95,10 +98,28 @@ danse_vector_search(client, collenction_name="demo_collection", query_vecotor=da
 print(danse_vector_search)
 
 # 6. 执行混合检索（结合稠密向量和稀疏向量）
-res = hybrid_search(client, "demo_collection", danse_vec=danse_vec, query_sparse_vecotor=sparse_vec, top_k=3)
-print(res[0])  # 打印第一个查询结果
-print(res)     # 打印完整结果
+res = hybrid_search(client, "demo_collection", danse_vec=danse_vec, query_sparse_vecotor=sparse_vec,top_k=3,)
+# print(res[0])  # 打印第一个查询结果
+# print(res)     # 打印完整结果
 
-# 7. 查看集合的字段信息
-for f in client.describe_collection("demo_collection")["fields"]:
-    print(f["name"], f["type"], f.get("params"))
+# # 7. 查看集合的字段信息
+# for f in client.describe_collection("demo_collection")["fields"]:
+#     print(f["name"], f["type"], f.get("params"))
+
+#8.生成
+from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv
+load_dotenv()
+
+texts = [hit["entity"]["text"] for hit in res[0]]
+context = "\n\n".join(texts)
+
+message_list = [
+    {"role": "system",
+     "content": "你是一个专业的法律问答机器人，只能根据提供的上下文回答问题；如果上下文无法回答，就回答「根据上下文无法回答该问题」"},
+    {"role": "user",
+     "content": f"根据以下上下文回答问题：\n{context}\n\n问题：{query}"},
+]
+
+llm = ChatOpenAI(model="deepseek-chat")
+print(llm.invoke(message_list).content)
