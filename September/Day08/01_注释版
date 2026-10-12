@@ -1,0 +1,46 @@
+from typing import Sequence                      # 类型标注用：表示"一串"
+from langchain.tools.base import BaseTool        # 工具的基类
+from concurrent.futures import ThreadPoolExecutor # 线程池（并发执行用）
+from langchain.messages import ToolMessage        # 工具结果消息类型
+
+
+class ToolNode:
+    # 初始化：传进来工具列表 + 最多同时跑几个
+    def __init__(self, tools=None, max_workers=3):
+        self.tools = tools
+        self.max_workers = max_workers
+        # 把 [工具A, 工具B] 转成 {"A名字": 工具A, "B名字": 工具B}
+        # 目的：后面拿到名字就能直接取到工具对象
+        self.name_to_tool = {tool.name: tool for tool in self.tools}
+
+    # __call__ 让这个对象能像函数一样被调用：node(state) 就会执行这里
+    def __call__(self, state, retime):
+        message_list = state["messages"]        # 从状态里取出消息列表
+        last_message = message_list[-1]         # 取最后一条（模型刚输出的）
+        tool_calls = last_message.tool_calls    # 模型决定要调哪些工具
+
+        # 开一个线程池，最多同时 3 个；with 结束自动关闭
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # 每个 tool_call 交给 execute_single_tool 去跑（并发）
+            # map 返回的是迭代器，list() 才真正开始执行并收集结果
+            result_generator = executor.map(self.execute_single_tool, tool_calls)
+            result = list(result_generator)
+
+        # 只返回"新增的部分"，LangGraph 会自动追加到 messages 里
+        return {"messages": result}
+
+    # 执行单个工具调用
+    def execute_single_tool(self, tool_call: dict) -> ToolMessage:
+        tool_name = tool_call["name"]              # 要调哪个工具
+        tool_args = tool_call["args"]              # 传什么参数
+        tool_call_id = tool_call["id"]             # 本次调用的编号
+        tool = self.name_to_tool[tool_name]        # 按名字取出工具对象
+
+        try:
+            res = tool.invoke(tool_args)           # 真正执行工具
+            return ToolMessage(content=res, tool_call_id=tool_call_id)
+        except Exception as e:
+            # 工具出错不让整个图崩掉：把错误信息当成"结果"返回给模型，
+            # 让模型自己看到失败原因、决定重试还是换办法
+            return ToolMessage(content=f"调用{tool_name}时发生异常：{e}",
+                               tool_call_id=tool_call_id)
