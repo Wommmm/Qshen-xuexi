@@ -3,6 +3,9 @@ from pydantic import BaseModel, Field
 from langchain.tools import tool
 from langchain.messages import HumanMessage
 from langchain_openai import ChatOpenAI
+from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
+import json
 import os
 
 app = FastAPI()
@@ -40,6 +43,21 @@ class RetrievalRequest(BaseModel):
   source: str | None =None
 
 
+class AnswerResult(BaseModel):
+    # 类型和min_length用于校验。
+    # description描述字段用途，也会作为提示提供给模型。
+    answer:str = Field(
+      min_length=1,
+      description="最终回答；资料问答只使用检索正文支持的信息",
+    )
+
+    sources: list[str] = Field(
+      description =(
+          "来源列表，取自本次检索文档的source字段；"
+          "未检索或没有匹配资料时返回空列表"
+      ),
+    )
+    
 class RetrievalService():
   def __init__(self,documents:list[dict]):
     self.documents = documents
@@ -92,7 +110,26 @@ async def retrieve(request: RetrievalRequest,retrieval_service:RetrievalService=
     return {"documents":documents,"count":len(documents)}
   except RuntimeError as e:
     raise HTTPException(status_code=503, detail=str(e))
-  
+
+def find_invalid_Soruces(
+    messages:list,
+    claimed_sources:list[str],
+)-> list[str]:
+  """返回模型声明中、不属于本次检索结果的来源。"""  
+  allowed_sources = set()
+  invalid_sources = []
+  for message in messages:
+    if message.type == "tool"and message.name == "search_documents":
+      data = json.loads(message.content)
+      for doc in data["documents"]:
+        allowed_sources.add(doc["source"])
+  for source in claimed_sources:
+    if source not in allowed_sources:
+      invalid_sources.append(source)
+  return invalid_sources    
+         
+
+      
 
 if __name__ == "__main__":
     api_key = os.getenv("new_apikey")
@@ -107,31 +144,53 @@ if __name__ == "__main__":
       max_retries=0,
     )
     # 提供工具说明和参数结构，由模型按需选择是否调用工具。
-    model_with_tools = model.bind_tools([search_documents],tool_choice="auto")
-    question = (
-  "检索本地资料中有关langchain的内容"
-  "检索关键词使用langchain，并解释他的作用"
+    agnet = create_agent(
+      model = model,
+      tools=[search_documents],
+      system_prompt=("你是一个技术资料助手。"
+            "涉及本地资料的问题，先使用检索工具。"
+            "普通问候或简单计算可以直接回答。"
+            "依据检索资料回答时说明来源；"
+            "资料没有支持的内容，不要编造。"
+            "如果检索结果为空，明确说明没有找到本地资料。"
+            "不要重复执行相同参数的检索。"
+      ),
+        # 按AnswerResult组织答案，并由框架解析、校验。
+      response_format=ToolStrategy(AnswerResult),
     )
-    ## messages是普通Python列表，按对话发生的顺序保存消息。
-    # HumanMessage把用户问题标记为“用户输入”。
-    messages = [HumanMessage(content=question)]
-    model_reply = model_with_tools.invoke(messages)
-    messages.append(model_reply)
-    print("模型提出的工具请求：", model_reply.tool_calls)
-    # 空列表表示模型没有请求调用工具。
-    if not model_reply.tool_calls:
-      print("直接回答：",model_reply.content)
-    else:
-      #有model_reply.tool_calls,执行工具，并且加入消息历史。
-      for tool_call in model_reply.tool_calls:
-        tool_reply = search_documents.invoke(tool_call)
-        messages.append(tool_reply)
-        print("工具返回：",tool_reply.content)
-
-      # 仅在工具执行后请求模型总结；不再提供工具，直接生成回答。
-      final_reply = model.invoke(messages)
-      print("最终回答：",final_reply.content)
-    
+    question =[
+         "什么是agent", 
 
 
+        "请检索FastAPI，来源限定为langgraph-docs，"
+        "最多返回两条，并依据本地资料解释它与LangGraph的关系。",
 
+
+        "请使用Docker作为关键词检索本地资料，"
+        "如果没有匹配资料，请明确说明。",
+    ]
+    for q in question:
+     print("\n问题：",q)
+  
+     result = agnet.invoke({"messages":[HumanMessage(content=q)]},config = {"recursion_limit":10})
+
+     roles = [message.type for message in result["messages"]]
+     print("信息角色顺序",roles)
+
+     for message in result["messages"]:
+       if(
+         message.type == "tool" and
+         message.name == "search_documents"
+       ):
+         print("检索结果",message.content)
+
+     strucured = result["structured_response"]  
+
+     print("回答：", strucured.answer)
+     print("来源：", strucured.sources)
+
+     # model_dump是Pydantic方法，将模型对象转换为字典。
+     print("完整结果：", strucured.model_dump())
+
+
+      
