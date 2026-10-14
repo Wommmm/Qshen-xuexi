@@ -5,6 +5,9 @@ from langchain.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
+from functools import lru_cache
+from openai import APIError
+from langgraph.errors import GraphRecursionError
 import json
 import os
 
@@ -57,6 +60,13 @@ class AnswerResult(BaseModel):
           "未检索或没有匹配资料时返回空列表"
       ),
     )
+
+class AskRequest(BaseModel):
+  question:str =Field(
+    min_length=1,
+    description="用户希望助手回答的问题",
+  )
+
     
 class RetrievalService():
   def __init__(self,documents:list[dict]):
@@ -130,36 +140,92 @@ def find_invalid_sources(
   return invalid_sources
 
          
+@lru_cache(maxsize=1)
+def get_agent():
+  api_key = os.getenv("new_apikey")
+  if not api_key:
+    raise HTTPException(
+      status_code=503,
+      detail="服务未配置环境变量 new_apikey",
+    )
+  model = ChatOpenAI(
+    model = "qwen-plus",
+    api_key = api_key,
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    timeout=60,
+    max_retries=0,
+  )
+  # 提供工具说明和参数结构，由模型按需选择是否调用工具。
+  agnet = create_agent(
+    model = model,
+    tools=[search_documents],
+    system_prompt=(
+     "你是一个技术资料助手。"
+    "涉及本地资料的问题，先使用检索工具。"
+    "普通问候或简单计算可以直接回答。"
+    "依据本地资料回答时，只使用本次检索正文明确支持的信息。"
+    "不要用模型已有知识补充资料中没有的细节。"
+    "资料不足以回答的部分，明确说明资料未提供相关信息。"
+    "sources只填写本次检索文档的source，不得自行构造来源。"
+    "如果检索结果为空，明确说明没有找到本地资料。"
+    "不要重复执行相同参数的检索。"
+    ),
+      # 按AnswerResult组织答案，并由框架解析、校验。
+    response_format=ToolStrategy(AnswerResult),
+  )
+  return agnet
+
+
+def answer_question(question:str,agent) ->AnswerResult:
+#  问答函数
+  #question 来自调用者
+  result = agent.invoke(
+    {"messages":[HumanMessage(content = question)]},
+    config={"recursion_limit":10},
+  )
+ # ToolStrategy 已将最终答案解析成 AnswerResult 对象。
+  answer_result = result["structured_response"]
+  # messages 中包含本次工具返回的文档，用它们核对来源。
+  invalid_sources = find_invalid_sources(
+    result["messages"],
+    answer_result.sources,
+  )
+  if invalid_sources:
+    raise ValueError("回答包含本次检索结果之外的来源")
+  return answer_result
+
+  
+@app.post("/ask",response_model=AnswerResult)
+def ask(
+  request: AskRequest,
+  agent=Depends(get_agent),
+):
+  question = request.question.strip()
+  if not question: 
+    raise HTTPException(status_code=422, detail="请输入问题",)
+  
+  try: 
+    return answer_question(question,agent)
+
+  except ValueError as e: 
+    raise HTTPException(
+      status_code=502,
+      detail="Agent 返回的结果没有通过校验",
+    )from e
+
+  except (APIError, GraphRecursionError, RuntimeError) as e:
+    raise HTTPException(
+      status_code=503,
+      detail="问答服务暂时不可用，请稍后重试",
+    ) from e
+
+
+  
+
 
       
-
 if __name__ == "__main__":
-    api_key = os.getenv("new_apikey")
-    if not api_key:
-        raise RuntimeError("请设置环境变量new_apikey")
-
-    model = ChatOpenAI(
-      model = "qwen-plus",
-      api_key = api_key,
-      base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-      timeout=60,
-      max_retries=0,
-    )
-    # 提供工具说明和参数结构，由模型按需选择是否调用工具。
-    agnet = create_agent(
-      model = model,
-      tools=[search_documents],
-      system_prompt=("你是一个技术资料助手。"
-            "涉及本地资料的问题，先使用检索工具。"
-            "普通问候或简单计算可以直接回答。"
-            "依据检索资料回答时说明来源；"
-            "资料没有支持的内容，不要编造。"
-            "如果检索结果为空，明确说明没有找到本地资料。"
-            "不要重复执行相同参数的检索。"
-      ),
-        # 按AnswerResult组织答案，并由框架解析、校验。
-      response_format=ToolStrategy(AnswerResult),
-    )
+    agnet = get_agent()
     question =[
          "什么是agent", 
 
