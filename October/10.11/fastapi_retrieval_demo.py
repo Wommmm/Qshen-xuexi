@@ -111,7 +111,7 @@ async def retrieve(request: RetrievalRequest,retrieval_service:RetrievalService=
   except RuntimeError as e:
     raise HTTPException(status_code=503, detail=str(e))
 
-def find_invalid_Soruces(
+def find_invalid_sources(
     messages:list,
     claimed_sources:list[str],
 )-> list[str]:
@@ -126,7 +126,9 @@ def find_invalid_Soruces(
   for source in claimed_sources:
     if source not in allowed_sources:
       invalid_sources.append(source)
-  return invalid_sources    
+  # 把检查结果返回给调用者；本函数只使用传进来的两个参数。
+  return invalid_sources
+
          
 
       
@@ -185,6 +187,17 @@ if __name__ == "__main__":
          print("检索结果",message.content)
 
      strucured = result["structured_response"]  
+
+     # 函数名后加括号才是调用；返回值invalid_sources是一个列表。
+     invalid_sources = find_invalid_sources(
+       result["messages"],
+       strucured.sources,
+     )
+     print("不合法来源：", invalid_sources)
+     print(
+       "伪造来源测试：",
+       find_invalid_sources(result["messages"], ["fake-docs"]),
+     )
 
      print("回答：", strucured.answer)
      print("来源：", strucured.sources)
