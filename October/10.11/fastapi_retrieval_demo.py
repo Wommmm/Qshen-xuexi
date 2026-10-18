@@ -44,6 +44,7 @@ class RetrievalRequest(BaseModel):
   # default设置默认值；ge/le分别表示大于等于/小于等于。
   top_k: int = Field(default=3,ge=1,le=10)
   source: str | None =None
+  min_content_length:int =Field(default=0,ge=0)
 
 
 class AnswerResult(BaseModel):
@@ -72,7 +73,7 @@ class RetrievalService():
   def __init__(self,documents:list[dict]):
     self.documents = documents
 
-  def retrieve(self,query:str,top_k:int,source: str | None = None,) -> list[dict]:
+  def retrieve(self,query:str,top_k:int,min_content_length:int=0,source: str | None = None,) -> list[dict]:
     if query == "模拟故障":
       raise RuntimeError("服务不可用")
     keyword = query.strip().lower()
@@ -80,6 +81,8 @@ class RetrievalService():
       return []
     results = []
     for doc in self.documents:
+      if len(doc["content"]) < min_content_length:
+        continue
       if source is not None and doc["source"] != source:
         continue
 
@@ -97,12 +100,13 @@ def search_documents(
   query: str,
   top_k: int = 3,
   source: str | None = None,
+  min_content_length:int=0,
 ):
   """
   按关键词搜索本地资料，可按来源过滤并限制返回数量。
   """
   # 工具包装负责接收参数，Service仍然负责真正的检索业务。
-  documents = service.retrieve(query=query,top_k=top_k,source=source)
+  documents = service.retrieve(query=query,top_k=top_k,source=source,min_content_length=min_content_length)
   return {"documents":documents,"count":len(documents)}
 
 
@@ -116,6 +120,7 @@ async def retrieve(request: RetrievalRequest,retrieval_service:RetrievalService=
       query = request.query,
       top_k = request.top_k,
       source=request.source,
+      min_content_length = request.min_content_length
     )
     return {"documents":documents,"count":len(documents)}
   except RuntimeError as e:
@@ -132,7 +137,13 @@ def find_invalid_sources(
     if message.type == "tool"and message.name == "search_documents":
       data = json.loads(message.content)
       for doc in data["documents"]:
-        allowed_sources.add(doc["source"])
+        source = doc.get("source")
+        if not isinstance(source,str):
+          raise ValueError("工具文档来源无效")
+        source = source.strip()
+        if not source:
+          raise ValueError("工具文档来源无效")
+        allowed_sources.add(source)
   for source in claimed_sources:
     if source not in allowed_sources:
       invalid_sources.append(source)

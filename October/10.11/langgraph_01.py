@@ -1,6 +1,6 @@
 from typing import TypedDict,Annotated
 from langgraph.graph import StateGraph,START,END
-from langchain.messages import HumanMessage,AIMessage,AnyMessage
+from langchain.messages import HumanMessage,AIMessage,AnyMessage,ToolMessage
 from langgraph.graph.message import add_messages
 from langchain.tools import tool
 import os
@@ -26,6 +26,7 @@ DOCUMENTS = [
 
 # TypedDict 声明字典有哪些字段、各字段是什么类型。
 class RetrievalState(TypedDict):
+    tool_rounds: int
     query: str             # 当前检索关键词
     documents: list[dict]  # 检索得到的文档
     answer: str            # 资料展示或无结果说明；当前不调用模型
@@ -74,6 +75,7 @@ def no_documents(state: RetrievalState)->dict:
 
 def route_after_retrieval(state: RetrievalState) -> str:
     # 路由返回分支标识；下方映射将它对应到实际节点。
+    MAX_TOOL_ROUNDS = 2
     return "found" if state["documents"] else "empty"
 
 model = ChatOpenAI(
@@ -86,25 +88,53 @@ model = ChatOpenAI(
 
 model_with_tools = model.bind_tools([search_documents])
 
+MAX_TOOL_ROUNDS = 2
 def route_after_model(state: RetrievalState) -> str:
     last_message = state["messages"][-1]
-    if last_message.tool_calls:
-        return "tools"
-    return "done"
+    if not last_message.tool_calls:
+        return "done"
+    rounds = state["tool_rounds"]
+    if rounds >= MAX_TOOL_ROUNDS:
+        return "limit"
+    return "tools"
+   
 
 def call_model(state: RetrievalState)->dict:
     messages = state["messages"]
     reply = model_with_tools.invoke(messages)
     return {"messages": [reply]}
 
-tool_node = ToolNode([search_documents])
+def count_tool_round(state:RetrievalState)->dict:
+    rounds = state["tool_rounds"]
+    return {"tool_rounds":rounds+1}
+
+
+def limit_reached(state:RetrievalState) ->dict:
+    messages = []
+    for call in state["messages"][-1].tool_calls:
+        messages.append(ToolMessage(
+            content="已经达到轮数上限",
+            tool_call_id=call["id"],status="error"
+        ))
+    messages.append(AIMessage(
+        content="已经达到轮数上限"
+    ))
+    return {"messages":messages}  
+
+tool_node = ToolNode([search_documents],handle_tool_errors= True,)
 
 builder = StateGraph(state_schema=RetrievalState)
+
 builder.add_node("model", call_model)
 builder.add_node("tools", tool_node)
+builder.add_node("count_tool_round",count_tool_round)
+builder.add_node("limit_reached",limit_reached)
+
 builder.add_edge(START, "model")
-builder.add_conditional_edges("model", route_after_model, {"tools": "tools", "done": END})
-builder.add_edge("tools", "model")
+builder.add_conditional_edges("model", route_after_model,{"tools": "tools", "done": END,"limit": "limit_reached"})
+builder.add_edge("tools", "count_tool_round")
+builder.add_edge("count_tool_round", "model")
+builder.add_edge("limit_reached", END)
 graph = builder.compile()
 
 if __name__ == "__main__":
@@ -112,6 +142,7 @@ if __name__ == "__main__":
         "query": " FastAPI ",
         "documents": [],
         "answer": "",
+        "tool_rounds":0,
         "messages":[HumanMessage(content="请检索FastAPI")]
     }
     
