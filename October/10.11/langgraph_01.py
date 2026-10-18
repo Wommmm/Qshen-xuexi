@@ -2,6 +2,12 @@ from typing import TypedDict,Annotated
 from langgraph.graph import StateGraph,START,END
 from langchain.messages import HumanMessage,AIMessage,AnyMessage
 from langgraph.graph.message import add_messages
+from langchain.tools import tool
+import os
+from langchain_openai import ChatOpenAI
+from fastapi_retrieval_demo import search_documents
+from langgraph.prebuilt import ToolNode
+
 
 # 检索来源
 DOCUMENTS = [
@@ -46,6 +52,7 @@ def retrieve_documents(state: RetrievalState) ->dict:
     return {"documents":results}        
 
 
+
 def format_answer(state: RetrievalState) -> dict:
     # 先逐条取正文，再使用换行符连接，便于观察每一步。
     contents = []
@@ -69,24 +76,36 @@ def route_after_retrieval(state: RetrievalState) -> str:
     # 路由返回分支标识；下方映射将它对应到实际节点。
     return "found" if state["documents"] else "empty"
 
-
-builder = StateGraph(state_schema =RetrievalState)
-builder.add_node("normalize",normalize_query)   
-builder.add_node("retrieve",retrieve_documents)
-builder.add_node("answer", format_answer)
-builder.add_node("no_documents", no_documents)
-
-builder.add_edge(START, "normalize")
-builder.add_edge("normalize", "retrieve")
-builder.add_conditional_edges(
-    "retrieve",
-    route_after_retrieval,
-    {"found": "answer", "empty": "no_documents"},
+model = ChatOpenAI(
+    model="qwen-plus",
+    api_key=os.getenv("new_apikey"),
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    timeout=60,
+    max_retries=0,
 )
-builder.add_edge("answer", END)
-builder.add_edge("no_documents", END)
-        
-graph = builder.compile()   
+
+model_with_tools = model.bind_tools([search_documents])
+
+def route_after_model(state: RetrievalState) -> str:
+    last_message = state["messages"][-1]
+    if last_message.tool_calls:
+        return "tools"
+    return "done"
+
+def call_model(state: RetrievalState)->dict:
+    messages = state["messages"]
+    reply = model_with_tools.invoke(messages)
+    return {"messages": [reply]}
+
+tool_node = ToolNode([search_documents])
+
+builder = StateGraph(state_schema=RetrievalState)
+builder.add_node("model", call_model)
+builder.add_node("tools", tool_node)
+builder.add_edge(START, "model")
+builder.add_conditional_edges("model", route_after_model, {"tools": "tools", "done": END})
+builder.add_edge("tools", "model")
+graph = builder.compile()
 
 if __name__ == "__main__":
     initial_state: RetrievalState = {
@@ -95,12 +114,19 @@ if __name__ == "__main__":
         "answer": "",
         "messages":[HumanMessage(content="请检索FastAPI")]
     }
+    
     result = graph.invoke(initial_state)
 
     print("图执行后的状态：", result)
 
+    tool_call_count = 0
     for message in result["messages"]:
-        print(message.type,message.content)
+        if isinstance(message,AIMessage):
+            for call in message.tool_calls:
+                print("调用了的工具",call["name"],"参数",call["args"])
+                tool_call_count += 1
+    print("调用了工具次数：",tool_call_count)            
+
 
     old_reply = result["messages"][-1]   
     new_reply = AIMessage(
