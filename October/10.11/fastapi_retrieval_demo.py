@@ -10,6 +10,12 @@ from openai import APIError
 from langgraph.errors import GraphRecursionError
 import json
 import os
+import asyncio
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent/"10.19"))
+from mcp_client_demo import search as mcp_search
 
 app = FastAPI()
 
@@ -109,6 +115,25 @@ def search_documents(
   documents = service.retrieve(query=query,top_k=top_k,source=source,min_content_length=min_content_length)
   return {"documents":documents,"count":len(documents)}
 
+#封装
+@tool("search_documents",args_schema = RetrievalRequest)
+def mcp_search_documents(
+  query: str,
+  top_k: int = 3,
+  source: str | None = None,
+  min_content_length:int=0,
+)->dict[str,object]:
+  """通过mcp服务检索本地资料。"""
+  # 运行协程并取得结果。这里用它连接同步工具函数和异步Client
+  return asyncio.run(mcp_search(
+    query = query,
+    url = "http://127.0.0.1:8051/mcp/",
+    top_k = top_k,
+    source = source,
+    min_content_length = min_content_length,
+  ))
+
+
 
 def get_retrieval_service():
   return service
@@ -169,7 +194,7 @@ def get_agent():
   # 提供工具说明和参数结构，由模型按需选择是否调用工具。
   agnet = create_agent(
     model = model,
-    tools=[search_documents],
+    tools=[mcp_search_documents],
     system_prompt=(
      "你是一个技术资料助手。"
     "涉及本地资料的问题，先使用检索工具。"
