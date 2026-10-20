@@ -8,6 +8,7 @@ from langchain.agents.structured_output import ToolStrategy
 from functools import lru_cache
 from openai import APIError
 from langgraph.errors import GraphRecursionError
+from langgraph.checkpoint.memory import InMemorySaver 
 import json
 import os
 import asyncio
@@ -72,6 +73,10 @@ class AskRequest(BaseModel):
   question:str =Field(
     min_length=1,
     description="用户希望助手回答的问题",
+  )
+  thread_id:str=Field(
+    min_length=1,
+    description="会话ID，用于保存会话结果",
   )
 
     
@@ -208,27 +213,37 @@ def get_agent():
     ),
       # 按AnswerResult组织答案，并由框架解析、校验。
     response_format=ToolStrategy(AnswerResult),
+    checkpointer= InMemorySaver(),
   )
   return agnet
 
 
-def answer_question(question:str,agent) ->AnswerResult:
+def answer_question(question:str,agent,thread_id:str) ->AnswerResult:
 #  问答函数
   #question 来自调用者
   result = agent.invoke(
     {"messages":[HumanMessage(content = question)]},
-    config={"recursion_limit":10},
+    config={"recursion_limit":10,"configurable":{"thread_id":thread_id}},
   )
  # ToolStrategy 已将最终答案解析成 AnswerResult 对象。
   answer_result = result["structured_response"]
-  # messages 中包含本次工具返回的文档，用它们核对来源。
+   # 从消息末尾向前找，只收集最新一条用户消息之后的工具结果。
+  current_tool_messages=[]
+  for message in reversed(result["messages"]):
+    if message.type == "human":
+      break
+    if message.type == "tool":
+      current_tool_messages.append(message)
+  # 仅用本轮工具结果核对来源。
   invalid_sources = find_invalid_sources(
-    result["messages"],
+    current_tool_messages,
     answer_result.sources,
   )
-  if invalid_sources:
-    raise ValueError("回答包含本次检索结果之外的来源")
+  if invalid_sources: 
+    raise ValueError("回答包含把本次检索之外的来源")
+
   return answer_result
+ 
 
   
 @app.post("/ask",response_model=AnswerResult)
@@ -239,9 +254,17 @@ def ask(
   question = request.question.strip()
   if not question: 
     raise HTTPException(status_code=422, detail="请输入问题",)
+  thread_id = request.thread_id.strip()
+  if not thread_id: 
+    raise HTTPException(status_code=422, detail="请输入会话ID",)
   
   try: 
-    return answer_question(question,agent)
+    return answer_question(
+      question=question,
+      agent=agent,
+      thread_id=thread_id,
+
+    )
 
   except ValueError as e: 
     raise HTTPException(
@@ -273,10 +296,17 @@ if __name__ == "__main__":
         "请使用Docker作为关键词检索本地资料，"
         "如果没有匹配资料，请明确说明。",
     ]
-    for q in question:
+    for index, q in enumerate(question, start=1):
      print("\n问题：",q)
   
-     result = agnet.invoke({"messages":[HumanMessage(content=q)]},config = {"recursion_limit":10})
+     # 三个独立演示题分别使用自己的会话，避免历史结果互相影响。
+     result = agnet.invoke(
+         {"messages": [HumanMessage(content=q)]},
+         config={
+             "recursion_limit": 10,
+             "configurable": {"thread_id": f"cli-demo-{index}"},
+         },
+     )
 
      roles = [message.type for message in result["messages"]]
      print("信息角色顺序",roles)
