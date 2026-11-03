@@ -23,15 +23,35 @@ public class RequestDemo{
         String requestId;
         int maxConcurrency;
 
-        RunOptions(Srting requestId,int maxConcurrency){
+        RunOptions(String requestId,int maxConcurrency){
+            if(requestId == null || requestId.isBlank()){
+                throw new IllegalArgumentException("requestId 不能为空");
+            }
+            if (maxConcurrency <1 || maxConcurrency >4){
+                throw new IllegalArgumentException("并发数必须在1~4");
+            }
+
             this.requestId = requestId.strip();
             this.maxConcurrency = maxConcurrency;
+            
         }
     }
-    public static void main(String[] args) {
+    public static void main(String[] args){
         RunOptions options = new RunOptions(" batch-001 ",2);
+        System.out.println("合法 id"+options.requestId);
+        System.out.println("合法并发数"+options.maxConcurrency);
 
-        System.out.println(options.requestId);
-        System.out.println(options.maxConcurrency);
+        try {
+            new RunOptions(" ",2);
+            System.out.println("错误：空白 ID 已经放行");
+        }
+        catch(IllegalArgumentException e){
+            System.out.println("错误："+e.getMessage());
+        
+        }
+
+        System.out.println("结束");
+      }
+
     }
-}
+ 
