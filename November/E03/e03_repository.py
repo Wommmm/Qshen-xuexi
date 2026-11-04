@@ -26,3 +26,15 @@ def save_run(result:dict, payload_hash:str):
                     error_code = item["error_code"]
                 )
                 session.add(detail)
+
+#负责运行结果查询
+def get_run(request_id:str) -> dict | None:
+    with Session(engine) as session:
+        record = session.get(RunRecord,request_id)
+        if record is None:
+            return None
+        return {
+            "request_id":record.request_id,
+            "payload_hash":record.payload_hash,
+            "result":record.result,
+        }

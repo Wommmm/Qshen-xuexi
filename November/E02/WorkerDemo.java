@@ -14,20 +14,18 @@ public class WorkerDemo {
             throw new RuntimeException("Error");
         } 
     }
-
-    public static void main(String[] args) {
-    Worker worker = new SuccessWork();
-    System.out.println(worker.execute());
-
-    Worker failedWorker = new ErrorWork();
-
-    try {
-        String result = failedWorker.execute();
-        System.out.println(result);
-    } catch (RuntimeException e) {
-        System.out.println("捕获到异常：" + e.getMessage());
+    static void runWorker(Worker worker){
+        try{
+            String result = worker.execute();
+            System.out.println("结果"+result);
+        } catch (RuntimeException e){
+            System.out.println("捕获到异常："+e.getMessage());
+        }
     }
 
-    System.out.println("程序继续执行");
-    } // 结束 main
-}     // 结束 WorkerDemo 类
+    public static void main(String[] args) {
+        runWorker(new SuccessWork());
+        runWorker(new ErrorWork());
+        System.out.println("结束");
+    }
+}

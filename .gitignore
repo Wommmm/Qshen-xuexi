@@ -8,3 +8,8 @@ assets/models/
 *.safetensors
 .env
 .vscode/
+.tools/
+.cache/
+.pytest_cache/
+*.pyc
+*.class

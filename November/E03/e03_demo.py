@@ -3,6 +3,8 @@ import asyncio
 import json
 from pathlib import Path
 from uuid import uuid4
+from unittest.mock import patch
+import e03_service
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,8 +36,30 @@ async def main():
 
     # 与导入分开：只有实际运行本实验时才创建表、执行任务和保存。
     init_db()
-    result = await execute_batch(**payload)
-    save_run(result, payload_hash)
+    with patch.object(
+        e03_service,
+        "execute_batch",
+        wraps= e03_service.execute_batch,
+    ) as execute_spy:
+        #第一次：数据库没有记录，执行并保存
+        result = await e03_service.submit_run(payload)
+        assert execute_spy.await_count == 1
+
+        #第二次：相同ID相同内容，直接返回已经保存了的结果
+        repeated = await e03_service.submit_run(payload)
+        assert repeated == result
+        assert execute_spy.await_count == 1
+
+        changed = {**payload, "timeout_ms":70}
+
+        try:
+             await e03_service.submit_run(changed)
+        except e03_service.RequestConflictError as exc:
+            print("冲突验证通过",exc)
+        else:
+            raise AssertionError("相同ID 内容不同，应该拒绝")
+        assert execute_spy.await_count == 1
+       
 
     # 打开新的 Session 读回，核对已经提交的数据。
     with Session(engine) as session:
