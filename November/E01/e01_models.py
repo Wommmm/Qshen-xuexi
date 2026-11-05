@@ -46,7 +46,8 @@ class RunRequest(BaseModel):
     max_concurrency: int = Field(strict=True, ge=1, le=4)
     timeout_ms: int = Field(strict=True, ge=10, le=5000)
 
-    @model_validator(mode="after")
+
+    @model_validator(mode="after")#先对模型进行校验，再调用次方法
     def check_unique_ids(self):
         # 此时字段已完成校验，item.id 已去除首尾空格。
         ids = [item.id for item in self.items]

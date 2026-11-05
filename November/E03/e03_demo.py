@@ -5,6 +5,8 @@ from pathlib import Path
 from uuid import uuid4
 from unittest.mock import patch
 import e03_service
+from copy import deepcopy
+from sqlalchemy.exc import IntegrityError
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -33,7 +35,17 @@ async def main():
     raw_payload["request_id"] = f"save-demo-{uuid4().hex}"
     payload = RunRequest.model_validate(raw_payload).model_dump()
     payload_hash = hash_payload(payload)
+    reordered_fields = dict(reversed(payload.items()))# 方法：取得整个字典的键值对
+    assert hash_payload(reordered_fields) == payload_hash
+    
+    # 将任务排列从 A、B、C 改成 C、B、A，内容发生变化。
+    reordered_items={
+        **payload,
+        "items":list(reversed(payload["items"]))
+    }
+    assert hash_payload(reordered_items) != payload_hash
 
+    print("摘要规则验证通过")
     # 与导入分开：只有实际运行本实验时才创建表、执行任务和保存。
     init_db()
     with patch.object(
@@ -84,5 +96,40 @@ async def main():
         print("本批次主记录：1；任务明细：", len(details))
         print("状态：", record.status, "计数：", record.result["counts"])
 
+    broken = deepcopy(result)
+    broken["request_id"] = f"roolback-demo-{uuid4().hex}"
+    broken["items"][1]["id"] = None 
+
+    try:
+        save_run(broken, payload_hash)
+    except IntegrityError as exc:
+        print("触发数据库约束异常",exc.orig)
+    else:
+        raise AssertionError("故障数据应该保存失败")
+
+    #用新会话检查：失败批次的主记录和明细都应不存在。
+    with Session(engine) as session:
+        record = session.get(RunRecord,broken["request_id"])
+        details = session.scalars(
+            select(RunItem)
+            .where(RunItem.request_id == broken["request_id"])
+        ).all()
+        assert record is None
+        assert details == []
+    print("回滚验证通过")
+    #故障之后，用新ID提交正常清求。
+    recoery_payload = {
+        **payload,
+        "request_id":f"recovery-demo-{uuid4().hex}",
+    }
+    recovered = await e03_service.submit_run(recoery_payload)
+
+    #新会话读回，确认结果确定已经提交
+    with Session(engine) as session:
+        record = session.get(RunRecord,recoery_payload["request_id"])
+        assert record is not None
+        assert record.result == recovered
+    print("恢复验证通过")
+    
 if __name__ == "__main__":
     asyncio.run(main())

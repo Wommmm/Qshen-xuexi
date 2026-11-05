@@ -66,7 +66,7 @@ async def execute_batch(request_id:str,items:list[dict],max_concurrency:int,time
     semaphore = asyncio.Semaphore(max_concurrency)
     stats = {"active":0,"peak":0}
     start = perf_counter()
- #列表推导式，与下列写法含义一致
+ #列表推导式
     jobs =[
         asyncio.create_task(
             limited_worker(
@@ -80,6 +80,19 @@ async def execute_batch(request_id:str,items:list[dict],max_concurrency:int,time
         )
         for item in items
     ]
+    # #jobs = []
+    # for item in items:
+    #     job = asyncio.create_task(
+    #         limited_worker(
+    #             semaphore,
+    #             stats,
+    #             item["id"],
+    #             item["delay_ms"],
+    #             item["mode"],
+    #             timeout_ms,
+    #         )
+    #     )
+    #     jobs.append(job)
 
     try:
         results = await asyncio.gather(*jobs)
