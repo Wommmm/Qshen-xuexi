@@ -15,7 +15,7 @@ from e03_models import Base
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def db_engine(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'runs.db'}")
 
     @event.listens_for(engine, "connect")
@@ -28,9 +28,27 @@ def client(tmp_path, monkeypatch):
 
     try:
         Base.metadata.create_all(engine)
-        # 替换仓储实际使用的 engine，避免写入 E03/runs.db。
-        monkeypatch.setattr(e03_repository, "engine", engine)
-        with TestClient(app) as test_client:
-            yield test_client
+        yield engine
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+def client(db_engine, monkeypatch):
+    # 替换仓储实际使用的 engine，避免写入 E03/runs.db。
+    monkeypatch.setattr(e03_repository, "engine", db_engine)
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def payload():
+    # 每个测试得到一个全新的字典，修改不影响其他测试。
+    return {
+        "request_id": "e04-001",
+        "items": [{"id": "A", "delay_ms": 0, "mode": "ok"}],
+        "max_concurrency": 1,
+        "timeout_ms": 5000,
+    }
+
+
